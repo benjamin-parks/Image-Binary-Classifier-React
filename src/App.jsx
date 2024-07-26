@@ -2,6 +2,7 @@ import { useState } from 'react'
 import './App.css'
 import Button from './components/Button'
 import Instructions from './components/Instructions'
+import FileImport from './components/FileImport'
 
 function App() {
 
@@ -23,6 +24,8 @@ function App() {
       </div>
       <br/>
       <Instructions/>
+      <FileImport file="single"/>
+      <FileImport/>
     </>
   )
 }
