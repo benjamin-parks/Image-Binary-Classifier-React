@@ -1,12 +1,23 @@
-export default function Button({title, size, buttonName}){
-    if (size === "3"){
+export default function Button({title, size, buttonName, onClick}) {
+    if (size === "3") {
         return (
-                <button className="btn btn-success col-3" id={buttonName + "Button"}>{title}</button>
-        )
-    }
-    else{
+            <button 
+                className="btn btn-success col-3" 
+                id={buttonName + "Button"} 
+                onClick={onClick}
+            >
+                {title}
+            </button>
+        );
+    } else {
         return (
-                <button className="btn btn-primary col-1 me-2" id={buttonName + "Button"}>{title}</button>        )
+            <button 
+                className="btn btn-primary col-1 me-2" 
+                id={buttonName + "Button"} 
+                onClick={onClick}
+            >
+                {title}
+            </button>
+        );
     }
-    
 }
