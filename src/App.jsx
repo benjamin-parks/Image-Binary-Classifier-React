@@ -1,4 +1,4 @@
-import React, { useState, useRef } from 'react';
+import React, { useState, useRef, useCallback } from 'react';
 import * as tf from '@tensorflow/tfjs';
 import "./App.css";
 import Button from './components/Button';
@@ -12,11 +12,17 @@ function App() {
   const [modelTrained, setModelTrained] = useState(false);
   const yesArrayRef = useRef([]);
   const noArrayRef = useRef([]);
-  const imageElementRef = useRef(null);
+  const [canvasRef, setCanvasRef] = useState(null);
   const [model, setModel] = useState(null);
+  const [imageDataUrl, setImageDataUrl] = useState(null); // Store image data URL
+
+  const handleSetCanvasRef = useCallback((node) => {
+    setCanvasRef(node);
+  }, []);
 
   const handleFileSelect = (file) => {
     setSelectedFile(file);
+    handleImageLoad(file); // Load image when file is selected
   };
 
   const togglePlantMode = () => {
@@ -74,28 +80,35 @@ function App() {
     alert('Model training complete.');
   };
 
-const handleGenerateBinary = async () => {
-  if (modelTrained) {
-    const canvas = imageElementRef.current;
-    if (!canvas || !(canvas instanceof HTMLCanvasElement)) {
-      alert("The reference is not a valid canvas element.");
-      return;
-    }
+  const handleGenerateBinary = async () => {
+    if (modelTrained) {
+      if (!imageDataUrl) {
+        alert("Image data is not available.");
+        return;
+      }
 
-    const ctx = canvas.getContext('2d');
-    if (!ctx) {
-      alert("Failed to get canvas context.");
-      return;
-    }
+      // Create an off-screen canvas to process the image data
+      const image = new Image();
+      image.src = imageDataUrl;
+      await new Promise((resolve) => {
+        image.onload = resolve;
+      });
 
-    const imageData = ctx.getImageData(0, 0, canvas.width, canvas.height);
-    const data = imageData.data;
-    const binaryImageData = new Uint8Array(data.length / 4);
+      const offCanvas = document.createElement('canvas');
+      offCanvas.width = image.width;
+      offCanvas.height = image.height;
+      const ctx = offCanvas.getContext('2d');
+      ctx.drawImage(image, 0, 0);
 
-    const BATCH_SIZE = 1000;
-    const numPixels = data.length / 4;
+      const imageData = ctx.getImageData(0, 0, offCanvas.width, offCanvas.height);
+      const data = imageData.data;
+      const binaryImageData = new Uint8Array(data.length / 4);
 
-    await tf.tidy(() => {
+      const BATCH_SIZE = 1000;
+      const numPixels = data.length / 4;
+
+      // Create a list of promises to handle asynchronous prediction
+      const promises = [];
       for (let i = 0; i < numPixels; i += BATCH_SIZE) {
         const batch = [];
         for (let j = i; j < i + BATCH_SIZE && j < numPixels; j++) {
@@ -105,23 +118,33 @@ const handleGenerateBinary = async () => {
           batch.push([r, g, b]);
         }
 
-        const predictions = model.predict(tf.tensor2d(batch, [batch.length, 3]));
-        predictions.array().then(predictionArray => {
+        // Handle predictions asynchronously and store results in the promises array
+        const promise = tf.tidy(() => {
+          const batchTensor = tf.tensor2d(batch, [batch.length, 3]);
+          return model.predict(batchTensor).array().then(predictionArray => {
+            // Manually dispose the batchTensor after use
+            batchTensor.dispose();
+            return predictionArray;
+          });
+        }).then(predictionArray => {
           for (let j = 0; j < batch.length; j++) {
             binaryImageData[i + j] = predictionArray[j][0] > 0.5 ? 1 : 0;
           }
         });
+
+        promises.push(promise);
       }
-    });
 
-    saveBinaryImage(binaryImageData);
-    alert('Binary image generated.');
-  } else {
-    alert("Model is not trained yet.");
-  }
-};
+      // Wait for all promises to resolve
+      await Promise.all(promises);
 
-  
+      // Save the binary image after all predictions are complete
+      saveBinaryImage(binaryImageData, offCanvas.width, offCanvas.height);
+      alert('Binary image generated.');
+    } else {
+      alert("Model is not trained yet.");
+    }
+  };
 
   const handleClearAnnotations = () => {
     yesArrayRef.current = [];
@@ -129,10 +152,8 @@ const handleGenerateBinary = async () => {
     alert("Annotations cleared.");
   };
 
-  const saveBinaryImage = (binaryData) => {
+  const saveBinaryImage = (binaryData, width, height) => {
     const canvas = document.createElement('canvas');
-    const width = imageElementRef.current.width;
-    const height = imageElementRef.current.height;
     canvas.width = width;
     canvas.height = height;
     const ctx = canvas.getContext('2d');
@@ -154,6 +175,23 @@ const handleGenerateBinary = async () => {
     link.click();
   };
 
+  const handleImageLoad = (file) => {
+    const img = new Image();
+    img.onload = () => {
+      const canvas = document.createElement('canvas');
+      const ctx = canvas.getContext('2d');
+      canvas.width = img.width;
+      canvas.height = img.height;
+      ctx.drawImage(img, 0, 0);
+      setImageDataUrl(canvas.toDataURL('image/png')); // Save the image data URL
+      if (canvasRef && canvasRef instanceof HTMLCanvasElement) {
+        const mainCtx = canvasRef.getContext('2d');
+        mainCtx.drawImage(img, 0, 0);
+      }
+    };
+    img.src = URL.createObjectURL(file);
+  };
+
   return (
     <>
       <h1 className="text-center pt-3">Image Annotator</h1>
@@ -166,7 +204,7 @@ const handleGenerateBinary = async () => {
         <Button title="Clear Annotations" size="1" buttonName="clearAnnos" onClick={handleClearAnnotations} />
         <Button title="Train Data" size="1" buttonName="train" onClick={handleTrainModel} />
         <Button title="Generate Binary" size="1" buttonName="genBinary" onClick={handleGenerateBinary} />
-        <Button title="Download Binary(s)" size="1" buttonName="download"/>
+        <Button title="Download Binary(s)" size="1" buttonName="download" />
       </div>
       <br />
       <AnnotateImage 
@@ -174,10 +212,10 @@ const handleGenerateBinary = async () => {
         drawingMode={drawingMode} 
         yesArrayRef={yesArrayRef} 
         noArrayRef={noArrayRef} 
-        imageElementRef={imageElementRef} 
+        setCanvasRef={handleSetCanvasRef} 
       />
       <br/>
-      <Instructions/>
+      <Instructions />
       <FileImport file="single" onFileSelect={handleFileSelect} />
       <FileImport />
     </>

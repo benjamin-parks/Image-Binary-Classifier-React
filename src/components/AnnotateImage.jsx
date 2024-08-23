@@ -1,7 +1,7 @@
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import PropTypes from 'prop-types';
 
-function AnnotateImage({ file, drawingMode, yesArrayRef, noArrayRef, imageElementRef }) {
+function AnnotateImage({ file, drawingMode, yesArrayRef, noArrayRef, setCanvasRef }) {
   const canvasRef = useRef(null);
   const [imageData, setImageData] = useState(null);
   const [annotations, setAnnotations] = useState([]);
@@ -9,6 +9,14 @@ function AnnotateImage({ file, drawingMode, yesArrayRef, noArrayRef, imageElemen
   const [offset, setOffset] = useState({ x: 0, y: 0 });
   const [isPanning, setIsPanning] = useState(false);
   const [startPan, setStartPan] = useState({ x: 0, y: 0 });
+  const [annotationMask, setAnnotationMask] = useState(null);
+
+  const setCanvasRefCallback = useCallback(node => {
+    if (node !== null) {
+      canvasRef.current = node;
+      setCanvasRef(node);
+    }
+  }, [setCanvasRef]);
 
   useEffect(() => {
     if (file) {
@@ -16,23 +24,21 @@ function AnnotateImage({ file, drawingMode, yesArrayRef, noArrayRef, imageElemen
       reader.onload = (e) => {
         const img = new Image();
         img.onload = () => {
-          imageElementRef.current = img;
           setImageData(img);
         };
         img.src = e.target.result;
       };
       reader.readAsDataURL(file);
     }
-  }, [file, imageElementRef]);
+  }, [file]);
 
   useEffect(() => {
-    if (imageData) {
+    if (imageData && canvasRef.current) {
       const canvas = canvasRef.current;
-      if (canvas) {
-        canvas.width = imageData.width;
-        canvas.height = imageData.height;
-        redrawCanvas();
-      }
+      canvas.width = imageData.width;
+      canvas.height = imageData.height;
+      redrawCanvas();
+      createMask(); // Create mask after image and annotations are set
     }
   }, [imageData, scale, offset, annotations]);
 
@@ -61,6 +67,35 @@ function AnnotateImage({ file, drawingMode, yesArrayRef, noArrayRef, imageElemen
       });
       ctx.stroke();
     });
+  };
+
+  const createMask = () => {
+    if (canvasRef.current) {
+      const canvas = canvasRef.current;
+      const maskCanvas = document.createElement('canvas');
+      maskCanvas.width = canvas.width;
+      maskCanvas.height = canvas.height;
+      const maskCtx = maskCanvas.getContext('2d');
+      maskCtx.clearRect(0, 0, maskCanvas.width, maskCanvas.height);
+
+      // Draw annotations on the mask canvas
+      annotations.forEach(annotation => {
+        maskCtx.beginPath();
+        maskCtx.strokeStyle = 'black'; // Color for annotation lines
+        annotation.points.forEach((point, index) => {
+          const x = point.x * scale + offset.x;
+          const y = point.y * scale + offset.y;
+          if (index === 0) {
+            maskCtx.moveTo(x, y);
+          } else {
+            maskCtx.lineTo(x, y);
+          }
+        });
+        maskCtx.stroke();
+      });
+
+      setAnnotationMask(maskCtx.getImageData(0, 0, maskCanvas.width, maskCanvas.height));
+    }
   };
 
   const handleMouseDown = (event) => {
@@ -120,7 +155,7 @@ function AnnotateImage({ file, drawingMode, yesArrayRef, noArrayRef, imageElemen
     <>
       {imageData && (
         <canvas
-          ref={canvasRef}
+          ref={setCanvasRefCallback}
           onMouseDown={handleMouseDown}
           onMouseMove={handleMouseMove}
           onMouseUp={handleMouseUp}
@@ -132,7 +167,6 @@ function AnnotateImage({ file, drawingMode, yesArrayRef, noArrayRef, imageElemen
   );
 }
 
-// Define the prop types for AnnotateImage
 AnnotateImage.propTypes = {
   file: PropTypes.object,
   drawingMode: PropTypes.string.isRequired,
@@ -142,9 +176,7 @@ AnnotateImage.propTypes = {
   noArrayRef: PropTypes.shape({
     current: PropTypes.arrayOf(PropTypes.arrayOf(PropTypes.number))
   }).isRequired,
-  imageElementRef: PropTypes.shape({
-    current: PropTypes.instanceOf(Element)
-  }).isRequired,
+  setCanvasRef: PropTypes.func.isRequired,
 };
 
 export default AnnotateImage;
