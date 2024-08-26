@@ -11,7 +11,7 @@ export default function FileImport({ file, buttonText, onFileSelect }) {
     return (
         <div style={{ display: "inline" }}>
             {file ? (
-                <>
+                <button>
                     <input
                         className="form-control"
                         type="file"
@@ -26,7 +26,7 @@ export default function FileImport({ file, buttonText, onFileSelect }) {
                     >
                         {buttonText || "Select File to Annotate"}
                     </label>
-                </>
+                </button>
             ) : (
                 <>
                     <input

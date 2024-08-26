@@ -256,7 +256,6 @@ function App() {
       <br/>
       <Instructions />
       <FileImport file="single" onFileSelect={handleFileSelect} />
-      <FileImport />
     </>
   );
 }
