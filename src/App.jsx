@@ -16,6 +16,17 @@ function App() {
   const [model, setModel] = useState(null);
   const [imageDataUrl, setImageDataUrl] = useState(null); // Store image data URL
 
+  // Use refs to keep track of state within event handlers
+  const modelRef = useRef(model);
+  const imageDataUrlRef = useRef(imageDataUrl);
+  const modelTrainedRef = useRef(modelTrained);
+
+  useEffect(() => {
+    modelRef.current = model;
+    imageDataUrlRef.current = imageDataUrl;
+    modelTrainedRef.current = modelTrained;
+  }, [model, imageDataUrl, modelTrained]);
+
   const handleSetCanvasRef = useCallback((node) => {
     setCanvasRef(node);
   }, []);
@@ -82,23 +93,23 @@ function App() {
   };
 
   const handleGenerateBinary = async () => {
-    console.log("Model trained:", modelTrained);
-    console.log("Model instance:", model);
-    console.log("Image data URL:", imageDataUrl);
+    console.log("Model trained:", modelTrainedRef.current);
+    console.log("Model instance:", modelRef.current);
+    console.log("Image data URL:", imageDataUrlRef.current);
 
-    if (!modelTrained) {
+    if (!modelTrainedRef.current) {
       alert("Model is not trained yet.");
       return;
     }
 
-    if (!imageDataUrl) {
+    if (!imageDataUrlRef.current) {
       alert("Image data is not available.");
       return;
     }
 
     // Create an off-screen canvas to process the image data
     const image = new Image();
-    image.src = imageDataUrl;
+    image.src = imageDataUrlRef.current;
     await new Promise((resolve) => {
       image.onload = resolve;
     });
@@ -130,7 +141,7 @@ function App() {
       // Handle predictions asynchronously and store results in the promises array
       const promise = tf.tidy(() => {
         const batchTensor = tf.tensor2d(batch, [batch.length, 3]);
-        return model.predict(batchTensor).array().then(predictionArray => {
+        return modelRef.current.predict(batchTensor).array().then(predictionArray => {
           // Manually dispose the batchTensor after use
           batchTensor.dispose();
           return predictionArray;
