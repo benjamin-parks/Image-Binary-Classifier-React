@@ -12,7 +12,7 @@ No install needed. Just go to [The website](https://binary-image-generator.netli
 3. Click Choose File and select an image you'd like to train on.
 4. Draw on areas of interest with the white marker (activated by default on launch OR by swapping to it by pressing 1 or the big green "Want" button at the top).
 5. Draw on areas you want to exclude with red marker (activate by hitting the "Don't Want" button or by pressing 2 on your keyboard).
-6. When you're happy, click save annotations.
+6. When you're happy, click the Train Data button.
 7. At this point you can load another image OR train your neural network if you're happy with what you've got by clicking the "Train" button.
 8. If you want to inference just the image you annotated, you can click the "Generate Binary" button.
-9. If you want to batch inference with the trained network, you can click the "choose files" button to upload a folder of JPG, JPEG, or PNG photos. After that you click the "Batch Inference" button and you are good to go!
+9. Wait for the network to generate the binary. When it is done, it will automatically download the binary image in the browser.
