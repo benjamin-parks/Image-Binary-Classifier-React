@@ -1,18 +1,67 @@
-# Image-Binary-Classifier
-Tool that will allow users to create arrays of RGB values that train a Tensorflow model to return binaries of the image over a confidence threshold. 
+# Image Binary Classifier
 
+A browser tool for turning an image into a **binary (black & white) mask** by
+painting over the parts you want. You tell the app, pixel by pixel, what you
+**want** (becomes `1` / white) and what you **don't want** (becomes `0` /
+black). Those painted samples build a **color lookup table** that classifies
+every remaining pixel in the image.
 
-## Install Steps
-No install needed. Just go to [The website](https://binary-image-generator.netlify.app/)
+Everything runs locally in the browser — no server, no upload.
 
+## Features
+
+- **Imports PNG, JPEG, and GeoTIFF/TIFF.** Multi-band and 16-bit/float GeoTIFFs
+  are contrast-stretched for display; single-band rasters render as grayscale.
+- **Paint what you want / don't want.** Two brushes:
+  - **Want** → `1` (white in the output)
+  - **Don't want** → `0` (black in the output)
+  - plus an **Erase** brush to fix mistakes.
+- **Lookup-table classification.** Painting collects the colors under your
+  brush into "want" and "don't want" sample sets. Building the table quantizes
+  RGB space and, for every color, records the nearest class (1‑nearest‑neighbor).
+  Generating the binary is then a fast per-pixel table lookup — fully
+  deterministic, no training time.
+- **Strictness control.** Decide how close a pixel's color must be to a "want"
+  sample before it counts. High strictness keeps only near-exact matches; low
+  strictness assigns every pixel to its nearest class.
+- **Georeferencing preserved.** When you import a GeoTIFF, the exported binary
+  PNG comes with an ESRI world file (`.pgw`) so the mask stays aligned in GIS
+  software.
+- Pan/zoom canvas, live binary preview, and keyboard shortcuts.
 
 ## How to use
-1. open webpage
-2. For consistency's sake, always click the Clear Annotations before starting. This will force clear the data.json used in the neural network.
-3. Click Choose File and select an image you'd like to train on.
-4. Draw on areas of interest with the white marker (activated by default on launch OR by swapping to it by pressing 1 or the big green "Want" button at the top).
-5. Draw on areas you want to exclude with red marker (activate by hitting the "Don't Want" button or by pressing 2 on your keyboard).
-6. When you're happy, click the Train Data button.
-7. At this point you can load another image OR train your neural network if you're happy with what you've got by clicking the "Train" button.
-8. If you want to inference just the image you annotated, you can click the "Generate Binary" button.
-9. Wait for the network to generate the binary. When it is done, it will automatically download the binary image in the browser.
+
+1. Click **Import image** and choose a PNG, JPEG, or GeoTIFF.
+2. With the **Want** brush, paint over the areas you want to keep (shown green).
+3. Switch to **Don't want** and paint the areas to exclude (shown red).
+4. Click **Build lookup table** (or just **Generate binary**, which builds it
+   automatically) to classify the image.
+5. Review the **binary preview**, adjust the strictness slider or add more
+   annotations, and rebuild if needed.
+6. Click **Download** to save the binary PNG (plus a world file for GeoTIFFs).
+
+### Keyboard shortcuts
+
+| Key | Action |
+| --- | --- |
+| `1` / `2` / `3` | Want / Don't want / Erase brush |
+| `[` / `]` | Decrease / increase brush size |
+| `F` | Fit image to view |
+| `T` | Build lookup table |
+| `G` | Generate binary |
+| `C` | Clear annotations |
+
+Scroll to zoom; hold **Space** or drag with the middle mouse button to pan.
+
+## Development
+
+```bash
+npm install
+npm run dev      # start the dev server
+npm run build    # production build to dist/
+npm run lint     # eslint
+```
+
+Built with React + Vite. GeoTIFF decoding uses
+[`geotiff`](https://github.com/geotiffjs/geotiff.js). The lookup-table build and
+binary generation run in a Web Worker to keep the UI responsive.

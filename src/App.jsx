@@ -1,274 +1,322 @@
-import React, { useState, useRef, useCallback, useEffect } from 'react';
-import * as tf from '@tensorflow/tfjs';
-import "./App.css";
-import Button from './components/Button';
-import Instructions from './components/Instructions';
-import FileImport from './components/FileImport';
-import AnnotateImage from './components/AnnotateImage';
+import { useCallback, useEffect, useRef, useState } from 'react';
+import PaintCanvas from './components/PaintCanvas';
+import { loadImageFile, buildWorldFile } from './lib/imageLoader';
+import './index.css';
 
-function App() {
-  const [selectedFile, setSelectedFile] = useState(null);
-  const [drawingMode, setDrawingMode] = useState('plant');
-  const [modelTrained, setModelTrained] = useState(false);
-  const yesArrayRef = useRef([]);
-  const noArrayRef = useRef([]);
-  const [canvasRef, setCanvasRef] = useState(null);
-  const [model, setModel] = useState(null);
-  const [imageDataUrl, setImageDataUrl] = useState(null); // Store image data URL
+const DEFAULT_QUANT = 32;
 
-  // Use refs to keep track of state within event handlers
-  const modelRef = useRef(model);
-  const imageDataUrlRef = useRef(imageDataUrl);
-  const modelTrainedRef = useRef(modelTrained);
+export default function App() {
+  const [image, setImage] = useState(null);
+  const [fileName, setFileName] = useState('');
+  const [mode, setMode] = useState('want');
+  const [brushSize, setBrushSize] = useState(24);
+  const [strictness, setStrictness] = useState(35);
+  const [status, setStatus] = useState('Import an image to get started.');
+  const [busy, setBusy] = useState(false);
+  const [trained, setTrained] = useState(false);
+  const [stats, setStats] = useState(null);
+  const [binary, setBinary] = useState(null); // { url, worldFile }
 
+  const canvasRef = useRef(null);
+  const workerRef = useRef(null);
+  const pendingGenerate = useRef(false);
+  // Always points at the latest generate handlers so the worker's message
+  // callback (bound once) never runs against a stale `image` closure.
+  const handlersRef = useRef({});
+
+  // Spin up the classifier worker once.
   useEffect(() => {
-    modelRef.current = model;
-    imageDataUrlRef.current = imageDataUrl;
-    modelTrainedRef.current = modelTrained;
-  }, [model, imageDataUrl, modelTrained]);
-
-  const handleSetCanvasRef = useCallback((node) => {
-    setCanvasRef(node);
-  }, []);
-
-  const handleFileSelect = (file) => {
-    setSelectedFile(file);
-    handleImageLoad(file); // Load image when file is selected
-  };
-
-  const togglePlantMode = () => {
-    setDrawingMode('plant');
-  };
-
-  const toggleNonPlantMode = () => {
-    setDrawingMode('nonPlant');
-  };
-
-  const normalizeData = (data) => data.map(([r, g, b]) => [r / 255, g / 255, b / 255]);
-
-  const handleTrainModel = async () => {
-    if (yesArrayRef.current.length === 0 || noArrayRef.current.length === 0) {
-      alert('Please annotate the image before training.');
-      return;
-    }
-
-    const normalizedYesData = normalizeData(yesArrayRef.current);
-    const normalizedNoData = normalizeData(noArrayRef.current);
-
-    // Create and train the model
-    const newModel = tf.sequential();
-    newModel.add(tf.layers.dense({ units: 64, inputShape: [3], activation: 'relu' }));
-    newModel.add(tf.layers.dense({ units: 32, activation: 'relu' }));
-    newModel.add(tf.layers.dense({ units: 16, activation: 'relu' }));
-    newModel.add(tf.layers.dense({ units: 8, activation: 'relu' }));
-    newModel.add(tf.layers.dense({ units: 2, activation: 'softmax' }));
-
-    newModel.compile({
-      optimizer: tf.train.adam(0.001),
-      loss: 'categoricalCrossentropy',
-      metrics: ['accuracy'],
-    });
-
-    const yesLabels = tf.tensor2d(Array(normalizedYesData.length).fill([1, 0]), [normalizedYesData.length, 2]);
-    const noLabels = tf.tensor2d(Array(normalizedNoData.length).fill([0, 1]), [normalizedNoData.length, 2]);
-    const inputs = tf.tensor2d([...normalizedYesData, ...normalizedNoData], [normalizedYesData.length + normalizedNoData.length, 3]);
-    const labels = tf.concat([yesLabels, noLabels]);
-
-    await newModel.fit(inputs, labels, {
-      epochs: 100,
-      shuffle: true,
-      callbacks: {
-        onEpochEnd: (epoch, logs) => {
-          if (epoch % 10 === 0) {
-            console.log(`Epoch ${epoch}: ${logs.loss}`);
-          }
-        },
-      },
-    });
-
-    setModel(newModel);
-    setModelTrained(true);
-    console.log("Model trained and set.");
-    alert('Model training complete.');
-  };
-
-  const handleGenerateBinary = async () => {
-    console.log("Model trained:", modelTrainedRef.current);
-    console.log("Model instance:", modelRef.current);
-    console.log("Image data URL:", imageDataUrlRef.current);
-
-    if (!modelTrainedRef.current) {
-      alert("Model is not trained yet.");
-      return;
-    }
-
-    if (!imageDataUrlRef.current) {
-      alert("Image data is not available.");
-      return;
-    }
-
-    // Create an off-screen canvas to process the image data
-    const image = new Image();
-    image.src = imageDataUrlRef.current;
-    await new Promise((resolve) => {
-      image.onload = resolve;
-    });
-
-    const offCanvas = document.createElement('canvas');
-    offCanvas.width = image.width;
-    offCanvas.height = image.height;
-    const ctx = offCanvas.getContext('2d');
-    ctx.drawImage(image, 0, 0);
-
-    const imageData = ctx.getImageData(0, 0, offCanvas.width, offCanvas.height);
-    const data = imageData.data;
-    const binaryImageData = new Uint8Array(data.length / 4);
-
-    const BATCH_SIZE = 1000;
-    const numPixels = data.length / 4;
-
-    // Create a list of promises to handle asynchronous prediction
-    const promises = [];
-    for (let i = 0; i < numPixels; i += BATCH_SIZE) {
-      const batch = [];
-      for (let j = i; j < i + BATCH_SIZE && j < numPixels; j++) {
-        const r = data[j * 4] / 255;
-        const g = data[j * 4 + 1] / 255;
-        const b = data[j * 4 + 2] / 255;
-        batch.push([r, g, b]);
-      }
-
-      // Handle predictions asynchronously and store results in the promises array
-      const promise = tf.tidy(() => {
-        const batchTensor = tf.tensor2d(batch, [batch.length, 3]);
-        return modelRef.current.predict(batchTensor).array().then(predictionArray => {
-          // Manually dispose the batchTensor after use
-          batchTensor.dispose();
-          return predictionArray;
-        });
-      }).then(predictionArray => {
-        for (let j = 0; j < batch.length; j++) {
-          binaryImageData[i + j] = predictionArray[j][0] > 0.5 ? 1 : 0;
+    const worker = new Worker(
+      new URL('./lib/classifier.worker.js', import.meta.url),
+      { type: 'module' }
+    );
+    worker.onmessage = (e) => {
+      const msg = e.data;
+      if (msg.type === 'trained') {
+        setTrained(true);
+        setStats({ wantCells: msg.wantCells, dontCells: msg.dontCells });
+        setStatus(
+          `Lookup table built from ${msg.wantCells} "want" and ${msg.dontCells} "don't want" colors.`
+        );
+        if (pendingGenerate.current) {
+          pendingGenerate.current = false;
+          handlersRef.current.runGenerate();
+        } else {
+          setBusy(false);
         }
-      });
-
-      promises.push(promise);
-    }
-
-    // Wait for all promises to resolve
-    await Promise.all(promises);
-
-    // Save the binary image after all predictions are complete
-    saveBinaryImage(binaryImageData, offCanvas.width, offCanvas.height);
-    alert('Binary image generated.');
-  };
-
-  const handleClearAnnotations = () => {
-    yesArrayRef.current = [];
-    noArrayRef.current = [];
-    alert("Annotations cleared.");
-  };
-
-  const saveBinaryImage = (binaryData, width, height) => {
-    const canvas = document.createElement('canvas');
-    canvas.width = width;
-    canvas.height = height;
-    const ctx = canvas.getContext('2d');
-    const imageData = ctx.createImageData(width, height);
-
-    for (let i = 0; i < binaryData.length; i++) {
-      const value = binaryData[i] * 255;
-      imageData.data[i * 4] = value;
-      imageData.data[i * 4 + 1] = value;
-      imageData.data[i * 4 + 2] = value;
-      imageData.data[i * 4 + 3] = 255;
-    }
-
-    ctx.putImageData(imageData, 0, 0);
-
-    const link = document.createElement('a');
-    link.href = canvas.toDataURL('image/png');
-    link.download = 'binary_image.png';
-    link.click();
-  };
-
-  const handleImageLoad = (file) => {
-    const img = new Image();
-    img.onload = () => {
-      const canvas = document.createElement('canvas');
-      const ctx = canvas.getContext('2d');
-      canvas.width = img.width;
-      canvas.height = img.height;
-      ctx.drawImage(img, 0, 0);
-      setImageDataUrl(canvas.toDataURL('image/png')); // Save the image data URL
-      if (canvasRef && canvasRef instanceof HTMLCanvasElement) {
-        const mainCtx = canvasRef.getContext('2d');
-        mainCtx.drawImage(img, 0, 0);
+      } else if (msg.type === 'generated') {
+        handlersRef.current.finishGenerate(msg);
+      } else if (msg.type === 'error') {
+        setStatus(msg.message);
+        setBusy(false);
       }
     };
-    img.src = URL.createObjectURL(file);
-  };
-
-  // Handle key press events
-  const handleKeyPress = (event) => {
-    console.log("Key pressed:", event.key);
-    switch (event.key) {
-      case '1':
-        togglePlantMode();
-        break;
-      case '2':
-        toggleNonPlantMode();
-        break;
-      case 'n':
-      case 'N':
-        handleClearAnnotations();
-        break;
-      case 't':
-      case 'T':
-        handleTrainModel();
-        break;
-      case 'g':
-      case 'G':
-        handleGenerateBinary();
-        break;
-      default:
-        break;
-    }
-  };
-
-  // Attach key press handler on mount
-  useEffect(() => {
-    window.addEventListener('keydown', handleKeyPress);
-    return () => window.removeEventListener('keydown', handleKeyPress);
+    workerRef.current = worker;
+    return () => worker.terminate();
   }, []);
 
+  const handleFile = useCallback(async (file) => {
+    if (!file) return;
+    setBusy(true);
+    setStatus(`Loading ${file.name}…`);
+    try {
+      const loaded = await loadImageFile(file);
+      setImage(loaded);
+      setFileName(file.name);
+      setTrained(false);
+      setStats(null);
+      setBinary((prev) => {
+        if (prev?.url) URL.revokeObjectURL(prev.url);
+        return null;
+      });
+      const geoNote = loaded.geo ? ' Georeferencing detected — a world file will accompany the export.' : '';
+      setStatus(`Loaded ${file.name} (${loaded.width}×${loaded.height}).${geoNote}`);
+    } catch (err) {
+      setStatus(`Failed to load image: ${err.message}`);
+    } finally {
+      setBusy(false);
+    }
+  }, []);
+
+  // Extract painted sample colors from the label map and build the LUT.
+  const handleTrain = useCallback(() => {
+    if (!image) return;
+    const map = canvasRef.current?.getLabelMap();
+    if (!map) return;
+
+    const data = image.imageData.data;
+    const want = [];
+    const dont = [];
+    for (let p = 0; p < map.length; p++) {
+      if (map[p] === 1) {
+        want.push(data[p * 4], data[p * 4 + 1], data[p * 4 + 2]);
+      } else if (map[p] === 2) {
+        dont.push(data[p * 4], data[p * 4 + 1], data[p * 4 + 2]);
+      }
+    }
+    if (want.length === 0 || dont.length === 0) {
+      setStatus('Paint some "want" (green) and "don\'t want" (red) areas first.');
+      return;
+    }
+
+    setBusy(true);
+    setStatus('Building lookup table…');
+    workerRef.current.postMessage({
+      type: 'train',
+      wantColors: new Uint8Array(want),
+      dontColors: new Uint8Array(dont),
+      strictness,
+      quant: DEFAULT_QUANT,
+    });
+  }, [image, strictness]);
+
+  const runGenerate = useCallback(() => {
+    setStatus('Generating binary image…');
+    const src = image.imageData.data;
+    const pixels = new Uint8ClampedArray(src); // copy; transferred to worker
+    workerRef.current.postMessage(
+      { type: 'generate', pixels, width: image.width, height: image.height },
+      [pixels.buffer]
+    );
+  }, [image]);
+
+  const finishGenerate = useCallback((msg) => {
+    const canvas = document.createElement('canvas');
+    canvas.width = msg.width;
+    canvas.height = msg.height;
+    const ctx = canvas.getContext('2d');
+    ctx.putImageData(new ImageData(msg.out, msg.width, msg.height), 0, 0);
+    canvas.toBlob((blob) => {
+      const url = URL.createObjectURL(blob);
+      setBinary((prev) => {
+        if (prev?.url) URL.revokeObjectURL(prev.url);
+        return { url, worldFile: image.geo ? buildWorldFile(image.geo) : null };
+      });
+      setStatus('Binary image ready. Preview it on the right, then download.');
+      setBusy(false);
+    }, 'image/png');
+  }, [image]);
+
+  // Expose the latest closures to the worker callback.
+  useEffect(() => {
+    handlersRef.current = { runGenerate, finishGenerate };
+  }, [runGenerate, finishGenerate]);
+
+  const handleGenerate = useCallback(() => {
+    if (!image) return;
+    setBusy(true);
+    if (!trained) {
+      // Build the table first, then generate automatically.
+      pendingGenerate.current = true;
+      handleTrain();
+    } else {
+      runGenerate();
+    }
+  }, [image, trained, handleTrain, runGenerate]);
+
+  const handleClear = useCallback(() => {
+    canvasRef.current?.clear();
+    setTrained(false);
+    setStats(null);
+    setStatus('Annotations cleared.');
+  }, []);
+
+  const downloadBinary = useCallback(() => {
+    if (!binary) return;
+    const base = (fileName.replace(/\.[^.]+$/, '') || 'image') + '_binary';
+    const a = document.createElement('a');
+    a.href = binary.url;
+    a.download = `${base}.png`;
+    a.click();
+    if (binary.worldFile) {
+      const wfUrl = URL.createObjectURL(
+        new Blob([binary.worldFile], { type: 'text/plain' })
+      );
+      const wf = document.createElement('a');
+      wf.href = wfUrl;
+      wf.download = `${base}.pgw`;
+      wf.click();
+      setTimeout(() => URL.revokeObjectURL(wfUrl), 1000);
+    }
+  }, [binary, fileName]);
+
+  // Keyboard shortcuts.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.target.tagName === 'INPUT') return;
+      switch (e.key) {
+        case '1': setMode('want'); break;
+        case '2': setMode('dont'); break;
+        case '3': setMode('erase'); break;
+        case '[': setBrushSize((s) => Math.max(1, s - 4)); break;
+        case ']': setBrushSize((s) => Math.min(200, s + 4)); break;
+        case 'f': case 'F': canvasRef.current?.fit(); break;
+        case 't': case 'T': handleTrain(); break;
+        case 'g': case 'G': handleGenerate(); break;
+        case 'c': case 'C': handleClear(); break;
+        default: break;
+      }
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [handleTrain, handleGenerate, handleClear]);
+
   return (
-    <>
-      <h1 className="text-center pt-3">Image Annotator</h1>
-      <div className="d-flex justify-content-center pt-4" style={{ display: "inline" }}>
-        <Button title="Want" size="3" buttonName="want" onClick={togglePlantMode} />
-        <Button title="Don't Want" size="3" buttonName="dontWant" onClick={toggleNonPlantMode} />
+    <div className="app">
+      <header className="topbar">
+        <div className="brand">
+          <span className="brand-mark" />
+          <h1>Image Binary Classifier</h1>
+        </div>
+        <label className="btn btn-import">
+          Import image
+          <input
+            type="file"
+            accept=".png,.jpg,.jpeg,.tif,.tiff,image/png,image/jpeg,image/tiff"
+            onChange={(e) => handleFile(e.target.files[0])}
+            hidden
+          />
+        </label>
+      </header>
+
+      <div className="body">
+        <aside className="panel">
+          <section className="group">
+            <h2>Brush</h2>
+            <div className="mode-row">
+              <button
+                className={`mode want ${mode === 'want' ? 'active' : ''}`}
+                onClick={() => setMode('want')}
+                title="Paint areas you want — becomes 1 (white)"
+              >
+                Want <span>1 · white</span>
+              </button>
+              <button
+                className={`mode dont ${mode === 'dont' ? 'active' : ''}`}
+                onClick={() => setMode('dont')}
+                title="Paint areas you don't want — becomes 0 (black)"
+              >
+                Don&apos;t want <span>0 · black</span>
+              </button>
+              <button
+                className={`mode erase ${mode === 'erase' ? 'active' : ''}`}
+                onClick={() => setMode('erase')}
+                title="Remove annotations"
+              >
+                Erase
+              </button>
+            </div>
+            <label className="slider">
+              Brush size <b>{brushSize}px</b>
+              <input
+                type="range" min="1" max="200" value={brushSize}
+                onChange={(e) => setBrushSize(Number(e.target.value))}
+              />
+            </label>
+          </section>
+
+          <section className="group">
+            <h2>Lookup table</h2>
+            <label className="slider">
+              Strictness <b>{strictness}</b>
+              <input
+                type="range" min="0" max="100" value={strictness}
+                onChange={(e) => { setStrictness(Number(e.target.value)); setTrained(false); }}
+              />
+            </label>
+            <p className="hint">
+              Higher strictness keeps only colors close to your &quot;want&quot; samples;
+              lower assigns every pixel to its nearest class.
+            </p>
+            <button className="btn" disabled={!image || busy} onClick={handleTrain}>
+              Build lookup table
+            </button>
+            {stats && (
+              <p className="stats">
+                {stats.wantCells} want · {stats.dontCells} don&apos;t-want colors
+              </p>
+            )}
+          </section>
+
+          <section className="group">
+            <h2>Output</h2>
+            <button className="btn primary" disabled={!image || busy} onClick={handleGenerate}>
+              Generate binary
+            </button>
+            <button className="btn ghost" disabled={!binary} onClick={downloadBinary}>
+              Download{binary?.worldFile ? ' PNG + world file' : ' PNG'}
+            </button>
+          </section>
+
+          <section className="group">
+            <h2>View</h2>
+            <div className="mini-row">
+              <button className="btn small" disabled={!image} onClick={() => canvasRef.current?.fit()}>Fit</button>
+              <button className="btn small" disabled={!image} onClick={handleClear}>Clear</button>
+            </div>
+            <p className="hint">
+              Scroll to zoom · middle-drag or hold Space to pan.<br />
+              Keys: 1 want · 2 don&apos;t · 3 erase · [ ] size · F fit · T train · G generate · C clear
+            </p>
+          </section>
+        </aside>
+
+        <main className="stage-wrap">
+          <PaintCanvas ref={canvasRef} image={image} mode={mode} brushSize={brushSize} />
+          {binary && (
+            <div className="preview">
+              <div className="preview-head">Binary preview</div>
+              <img src={binary.url} alt="Binary output" />
+            </div>
+          )}
+        </main>
       </div>
-      <br />
-      <div className="d-flex justify-content-center pt-2" style={{ display: "inline" }}>
-        <Button title="Clear Annotations" size="1" buttonName="clearAnnos" onClick={handleClearAnnotations} />
-        <Button title="Train Data" size="1" buttonName="train" onClick={handleTrainModel} />
-        <Button title="Generate Binary" size="1" buttonName="genBinary" onClick={handleGenerateBinary} />
-        {/* <Button title="Download Binary(s)" size="1" buttonName="download" /> */}
-      </div>
-      <br />
-      <AnnotateImage 
-        file={selectedFile} 
-        drawingMode={drawingMode} 
-        yesArrayRef={yesArrayRef} 
-        noArrayRef={noArrayRef} 
-        setCanvasRef={handleSetCanvasRef} 
-      />
-      <br/>
-      <Instructions />
-      <FileImport file="single" onFileSelect={handleFileSelect} />
-    </>
+
+      <footer className={`statusbar ${busy ? 'busy' : ''}`}>
+        {busy && <span className="spinner" />}
+        {status}
+        {fileName && <span className="filetag">{fileName}</span>}
+      </footer>
+    </div>
   );
 }
-
-export default App;
