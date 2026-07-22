@@ -1,0 +1,15 @@
+# Netlify build configuration for the Vite + React app.
+
+[build]
+  command = "npm run build"
+  publish = "dist"
+
+[build.environment]
+  # Vite 5 and geotiff.js need a modern Node runtime.
+  NODE_VERSION = "20"
+
+# Single-page app: serve index.html for any path that isn't a real file.
+[[redirects]]
+  from = "/*"
+  to = "/index.html"
+  status = 200
